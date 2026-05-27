@@ -4,7 +4,6 @@ from node import Node
 from tri3 import Tri3
 from material import Material
 
-
 class Heat_transient:
 
     def __init__(self, time_start: float, time_end, tot_increment: int, plot_interval: int):
@@ -14,111 +13,158 @@ class Heat_transient:
         self.plot_interval: int = plot_interval
 
     # ---------------------------------------------------------------------------
-    def heat_solver(self, nodes: list[Node], elements: list[Tri3], materials: list[Material], K: np) -> np:
-        dtime = (self.time_end - self.time_start) / self.tot_increment + 1
-        dplot = (self.time_end - self.time_start) / self.plot_interval + 1
-        temp: np = []
-        temp_out: np = []
-        f, fix = self.assembly_loads(nodes)  # assemblaggio dei carichi e vettore fix
-        print(f'carichi: {f}\n')
-        K_inv, f_rid = self.linear_solver(K, f, fix)
-        time: float = 0.0
-        plot: float = 0.0
-        for inc in range(self.tot_increment):
-            temp: np = np.dot(K_inv, f_rid)    # risoluzione del sistema lineare a = K^-1 * f
-            if time == plot:
-                temp_out = temp[inc]
-                plot += dplot
-            time += dtime
+    def heat_solver(self, nodes, elements, materials, K, t_iniziale, callback=None):
 
-        return (temp_out)  # output
+        f, fix = self.assembly_loads(nodes)
+        C = self.assembly_capacity(nodes, elements, materials)
 
+        dt = (self.time_end - self.time_start) / self.tot_increment
+        print(f"dt = {dt}")
+
+        T = np.full(len(nodes), t_iniziale, dtype=float)
+
+        free_index = np.where(np.array([n.fix[0] for n in nodes]) == 0)[0]
+        fixed_index = np.where(np.array([n.fix[0] for n in nodes]) == 1)[0]
+        T_fixed = np.array([n.dof[0] for n in nodes])[fixed_index]
+        T[fixed_index] = T_fixed
+
+        A = C / dt + K
+        A_rid = A[np.ix_(free_index, free_index)]
+
+        for step in range(self.tot_increment):
+
+            t = self.time_start + (step + 1) * dt
+
+            rhs = (C / dt) @ T
+            rhs_free = rhs[free_index]
+            rhs_free += f[free_index]
+            rhs_free -= A[np.ix_(free_index, fixed_index)] @ T_fixed
+
+            T_new_free = np.linalg.solve(A_rid, rhs_free)
+
+            T[free_index] = T_new_free
+            T[fixed_index] = T_fixed
+
+            print(f"t={t:.3f}s — T min={T.min():.2f} max={T.max():.2f}")
+
+            if callback:
+                callback(T.copy(), t)
+
+        return T
     # ---------------------------------------------------------------------------
-    def assembly(self, nodes: list[Node], elements: list[Tri3], materials: list[Material]) -> np:
-        tot_elements: int = len(elements)
-        tot_nodes: int = len(nodes)
+    def assembly(self, nodes, elements, materials):
+        tot_nodes = len(nodes)
+        tot_elements = len(elements)
         if tot_elements <= 0 or tot_nodes <= 0:
             return None
 
-        dim_dof: int = Node.NDOF
-        dim_problem: int = tot_nodes * dim_dof
+        dim_dof = Node.NDOF
+        K = np.zeros((tot_nodes * dim_dof, tot_nodes * dim_dof))
 
-        K: np = np.zeros((dim_problem, dim_problem))
-
-        cont_test: float = 1.0
         for elem in elements:
-            tot_el_nodes: int = len(elem.connectivity)
-            pos: list[int] = []
-            ns: list[Node] = []
+            tot_el_nodes = len(elem.connectivity)
+            pos, ns = [], []
+
             for id_node in elem.connectivity:
-                pos.append(find_position(id_node, nodes))
-                if pos[-1] >= 0:
-                    ns.append(nodes[pos[-1]])
+                p = find_position(id_node, nodes)
+                if p >= 0:
+                    pos.append(p)
+                    ns.append(nodes[p])
                 else:
-                    print('ERROR in assembly: node %i not found' % (id_node))
+                    print(f'ERROR: node {id_node} not found')
                     return None
+
             pos_mat = find_position(elem.id_mat, materials)
             if pos_mat is None:
-                print('ERROR in assembly: material %i not found' % (find_position))
+                print(f'ERROR: material {elem.id_mat} not found')
                 return None
             mat = materials[pos_mat]
-            # ...............................insert the correct capacity matrix
-            # elK: np = cont_test * np.ones((tot_el_nodes * dim_dof, tot_el_nodes * dim_dof))
-            # cont_test += 1
-            elK: np = elem.stiffness(ns, mat, elem.id)
-            # .................................................................
+
+            elK = elem.stiffness(ns, mat, elem.id)
+
             for node_row in range(tot_el_nodes):
-                pos_row: int = pos[node_row]
                 for node_col in range(tot_el_nodes):
-                    pos_col: int = pos[node_col]
                     for i in range(dim_dof):
-                        row: int = dim_dof * pos_row + i
-                        row_el: int = dim_dof * node_row + i
+                        row = dim_dof * pos[node_row] + i
+                        row_el = dim_dof * node_row + i
                         for j in range(dim_dof):
-                            col: int = dim_dof * pos_col + j
-                            col_el: int = dim_dof * node_col + j
+                            col = dim_dof * pos[node_col] + j
+                            col_el = dim_dof * node_col + j
                             K[row, col] += elK[row_el, col_el]
         return K
-
     # ---------------------------------------------------------------------------
-    def assembly_loads(self, nodes: list[Node]) -> tuple[np, np]:
-        dim: int = len(nodes)
-        if dim <= 0:   #se non vi è la lista dei nodi esce
-            return (None, None)
-        NDOF = nodes[0].NDOF
-        dim = dim * NDOF
-        f: np = np.zeros(dim)
-        fix: np = np.zeros(dim)
-        cont: int = 0
-        for n, node in enumerate(nodes): #n=posizione nodo, node=elemento associato alla posizione
-            for i, dof in enumerate(node.dof):
-                if node.fix[i] == 1:
-                    f[cont] = node.dof[i]
-                    fix[cont] = node.fix[i]
-                cont += 1
+    def assembly_loads(self, nodes):
+        N = len(nodes)
+        f = np.zeros(N)
+        fix = np.zeros(N)
 
-        return (f, fix)
-
+        for i, node in enumerate(nodes):
+            if node.fix[0] == 1:
+                fix[i] = 1
+            else:
+                f[i] = node.load  # solo Neumann
+        return f, fix
     # ---------------------------------------------------------------------------
     def linear_solver(self, K, f, fix) -> np:
-        print(f'Matrice K\n'
-              f'{K}\n')
-        K_inv: np = np.zeros((len(K), len(K)))[0]
-        delete_index = np.where(fix == 1)
-        print("fix:", fix)
-        print("old K shape:", K.shape)
-        K_rid = np.delete(K, delete_index, axis=0)  # Colonne
-        K_rid = np.delete(K_rid, delete_index, axis=1)  # Righe
-        f_rid = np.delete(f, delete_index, axis=0)  # Colonne f
-        print(f'Matrice K ridotta\n'
-              f'{K_rid}\n')
-        print("K_rid shape:", K_rid.shape)
-        if np.linalg.det(K_rid) == 0:
-            print("WARNING: K_rid matrix is singular")
-            exit()
-        K_inv = np.linalg.inv(K_rid)  # inversione matrice K
-        print(f'Matrice Inversa K_inv:\n'
-              f'{K_inv}\n')
-        return(K_inv, f_rid)
+        delete_index = np.where(fix == 1)[0]
+        free_index = np.where(fix == 0)[0]
 
+        K_rid = K[np.ix_(free_index, free_index)]
+
+        f_free = f[free_index]
+        T_fixed = f[delete_index]
+        K_cross = K[np.ix_(free_index, delete_index)]
+        f_rid = f_free - K_cross @ T_fixed
+
+        print("K_rid shape:", K_rid.shape)
+        rank = np.linalg.matrix_rank(K_rid)
+        if rank < K_rid.shape[0]:
+            print(f"WARNING: K_rid singolare (rank={rank}/{K_rid.shape[0]})")
+            exit()
+        print(f"K_rid non singolare (rank={rank}/{K_rid.shape[0]})")
+
+        temp_rid = np.linalg.solve(K_rid, f_rid)
+        return (None, f_rid, temp_rid)
     # ---------------------------------------------------------------------------
+    def assembly_capacity(self, nodes, elements, materials):
+        tot_nodes = len(nodes)
+        dim_dof = Node.NDOF
+        C = np.zeros((tot_nodes * dim_dof, tot_nodes * dim_dof))
+
+        for elem in elements:
+            ns = [nodes[find_position(nid, nodes)] for nid in elem.connectivity]
+            mat = materials[find_position(elem.id_mat, materials)]
+
+            elC = elem.capacity(ns, mat)
+
+            pos = [find_position(nid, nodes) for nid in elem.connectivity]
+            for i, pi in enumerate(pos):
+                for j, pj in enumerate(pos):
+                    C[pi, pj] += elC[i, j]
+        return C
+
+    def heat_steady(self, nodes, elements, materials, K):
+
+        f, fix = self.assembly_loads(nodes)
+
+        free_index = np.where(fix == 0)[0]
+        fixed_index = np.where(fix == 1)[0]
+
+        T = np.zeros(len(nodes))
+        T_fixed = np.array([n.dof[0] for n in nodes])[fixed_index]
+        T[fixed_index] = T_fixed
+
+        K_rid = K[np.ix_(free_index, free_index)]
+        f_free = f[free_index]
+        f_free -= K[np.ix_(free_index, fixed_index)] @ T_fixed
+
+        rank = np.linalg.matrix_rank(K_rid)
+        if rank < K_rid.shape[0]:
+            print(f"WARNING: K_rid singolare (rank={rank}/{K_rid.shape[0]})")
+            exit()
+        print(f"K_rid non singolare (rank={rank}/{K_rid.shape[0]})")
+
+        T[free_index] = np.linalg.solve(K_rid, f_free)
+
+        print(f"Steady-state — T min={T.min():.2f} max={T.max():.2f}")
+        return T

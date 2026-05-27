@@ -9,11 +9,12 @@ class Node:
   def __init__(self, id: int = 0, position: np = None) -> None:
     self.id = id
     if position is None:
-      self.x: np = np.zeros(self.DIMSPACE)
+        self.x: np = np.zeros(self.DIMSPACE)
     else:
-      self.x: np = position
+        self.x: np = position
     self.fix: np = np.zeros(self.NDOF, dtype='int')
     self.dof: np = np.zeros(self.NDOF, dtype='float')
+    self.load: float = 0.0   # <-- aggiungi solo questa riga
   # ---------------------------------------------------------------------------
   def distance(self, node: 'Node') -> float:
     d: np = node.x - self.x

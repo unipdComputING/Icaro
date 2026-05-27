@@ -1,0 +1,6 @@
+*.vik
+*.lock
+*.msh
+*.swp
+*.toml
+.env/

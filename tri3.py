@@ -39,13 +39,13 @@ class Tri3:
         ]) / (2 * area)
     # ---------------------------------------------------------------------------
     def stiffness(self, el_nodes: list[Node], mat: Material, elem_id: int) -> np:
-        print(f"CALCOLO DI K - ELEMENTO {elem_id} -------------------------------------------------------------\n")
+        #print(f"CALCOLO DI K - ELEMENTO {elem_id} -------------------------------------------------------------\n")
         area = self.get_area(el_nodes)
-        print(f"Area dell'elemento: {area}")
+      #  print(f"Area dell'elemento: {area}")
         Tri3.check_stretch(el_nodes, area)
         B_matrix = self.get_B_matrix(el_nodes, area)
-        stiffness_matrix = mat.cond * B_matrix.T @ B_matrix
-        print(f"el_K: {stiffness_matrix}\n")
+        stiffness_matrix = mat.cond * area * (B_matrix.T @ B_matrix)
+       # print(f"el_K: {stiffness_matrix}\n")
         return stiffness_matrix
     # ---------------------------------------------------------------------------
     def draw(self, screen, nodes, zoom, pan) -> None:
@@ -57,3 +57,12 @@ class Tri3:
         pg.draw.polygon(screen, (50,150,255), vertices, width=0)
         pg.draw.polygon(screen, (0,0,0), vertices, width=2)
     # ---------------------------------------------------------------------------
+
+    def capacity(self, nodes, mat):
+
+        coords = np.array([[n.x[0], n.x[1]] for n in nodes])
+        x, y = coords[:, 0], coords[:, 1]
+        A = 0.5 * abs((x[1] - x[0]) * (y[2] - y[0]) - (x[2] - x[0]) * (y[1] - y[0]))
+        rho_cp = mat.dens * mat.cspec
+        Ce = rho_cp * A / 12.0 * (np.ones((3, 3)) + np.eye(3))
+        return Ce
