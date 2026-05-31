@@ -3,6 +3,7 @@ from globals import find_position
 from node import Node
 from tri3 import Tri3
 from material import Material
+from scipy.linalg import eig
 
 class Heat_transient:
 
@@ -13,7 +14,7 @@ class Heat_transient:
         self.plot_interval: int = plot_interval
 
     # ---------------------------------------------------------------------------
-    def heat_solver(self, nodes, elements, materials, K, t_iniziale, callback=None):
+    def heat_transient_solver(self, nodes, elements, materials, K, t_iniziale, callback=None):
 
         f, fix = self.assembly_loads(nodes)
         C = self.assembly_capacity(nodes, elements, materials)
@@ -93,38 +94,46 @@ class Heat_transient:
                             K[row, col] += elK[row_el, col_el]
         return K
     # ---------------------------------------------------------------------------
-    def assembly_loads(self, nodes):
-        N = len(nodes)
-        f = np.zeros(N)
-        fix = np.zeros(N)
+    def assembly_loads(self, nodes: list[Node]) -> tuple[np, np]:
+        dim: int = len(nodes)
+        if dim <= 0:
+            return (None, None)
+        NDOF = nodes[0].NDOF
+        dim = dim * NDOF
+        f: np = np.zeros(dim)
+        fix: np = np.zeros(dim)
+        cont: int = 0
+        for n, node in enumerate(nodes):
+            for i in range(node.NDOF):
+                if node.fix[i] == 1:
+                    f[cont] = node.dof[i]
+                    fix[cont] = 1
+                else:
+                    f[cont] = node.load
+                cont += 1
 
-        for i, node in enumerate(nodes):
-            if node.fix[0] == 1:
-                fix[i] = 1
-            else:
-                f[i] = node.load  # solo Neumann
-        return f, fix
+        return (f, fix)
     # ---------------------------------------------------------------------------
-    def linear_solver(self, K, f, fix) -> np:
-        delete_index = np.where(fix == 1)[0]
+    def heat_steady_solver(self, nodes, elements, materials, K):
+
+        f, fix = self.assembly_loads(nodes)
+        f_neumann = np.array([n.load for n in nodes], dtype=float)  # ← aggiungere
+
         free_index = np.where(fix == 0)[0]
+        fixed_index = np.where(fix == 1)[0]
+
+        T = np.zeros(len(nodes))
+        T_fixed = np.array([n.dof[0] for n in nodes])[fixed_index]
+        T[fixed_index] = T_fixed
 
         K_rid = K[np.ix_(free_index, free_index)]
-
         f_free = f[free_index]
-        T_fixed = f[delete_index]
-        K_cross = K[np.ix_(free_index, delete_index)]
-        f_rid = f_free - K_cross @ T_fixed
+        f_free -= K[np.ix_(free_index, fixed_index)] @ T_fixed
+        f_free += f_neumann[free_index]
 
-        print("K_rid shape:", K_rid.shape)
-        rank = np.linalg.matrix_rank(K_rid)
-        if rank < K_rid.shape[0]:
-            print(f"WARNING: K_rid singolare (rank={rank}/{K_rid.shape[0]})")
-            exit()
-        print(f"K_rid non singolare (rank={rank}/{K_rid.shape[0]})")
+        T[free_index] = np.linalg.solve(K_rid, f_free)
+        return T
 
-        temp_rid = np.linalg.solve(K_rid, f_rid)
-        return (None, f_rid, temp_rid)
     # ---------------------------------------------------------------------------
     def assembly_capacity(self, nodes, elements, materials):
         tot_nodes = len(nodes)
@@ -142,29 +151,3 @@ class Heat_transient:
                 for j, pj in enumerate(pos):
                     C[pi, pj] += elC[i, j]
         return C
-
-    def heat_steady(self, nodes, elements, materials, K):
-
-        f, fix = self.assembly_loads(nodes)
-
-        free_index = np.where(fix == 0)[0]
-        fixed_index = np.where(fix == 1)[0]
-
-        T = np.zeros(len(nodes))
-        T_fixed = np.array([n.dof[0] for n in nodes])[fixed_index]
-        T[fixed_index] = T_fixed
-
-        K_rid = K[np.ix_(free_index, free_index)]
-        f_free = f[free_index]
-        f_free -= K[np.ix_(free_index, fixed_index)] @ T_fixed
-
-        rank = np.linalg.matrix_rank(K_rid)
-        if rank < K_rid.shape[0]:
-            print(f"WARNING: K_rid singolare (rank={rank}/{K_rid.shape[0]})")
-            exit()
-        print(f"K_rid non singolare (rank={rank}/{K_rid.shape[0]})")
-
-        T[free_index] = np.linalg.solve(K_rid, f_free)
-
-        print(f"Steady-state — T min={T.min():.2f} max={T.max():.2f}")
-        return T
