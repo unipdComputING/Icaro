@@ -1013,7 +1013,7 @@ class IcaroApp(Frame):
     def _section_plot(self, parent):
         card = self._card(parent, "PLOT PARAMETERS")
         self.v_smooth      = BooleanVar(value=True)
-        self.v_sigma       = StringVar(value="10")
+        self.v_sigma       = StringVar(value="3")
         self.v_grid_res    = StringVar(value="300")
         self.v_step_cont = StringVar(value="5")
         self._label_entry(card, 3, "Step contourf [°C]", self.v_step_cont)
